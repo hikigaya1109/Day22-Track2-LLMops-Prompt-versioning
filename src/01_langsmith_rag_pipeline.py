@@ -14,6 +14,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+# Fix Windows cp1252 encoding for Vietnamese characters
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
 # ⚠️ QUAN TRỌNG: Import config TRƯỚC KHI import bất kỳ thư viện LangChain nào.
 # config.py tự động đặt LANGCHAIN_TRACING_V2, LANGCHAIN_API_KEY, ... vào os.environ
 import config
@@ -40,17 +46,17 @@ def setup_vectorstore():
         vectorstore = build_vectorstore(chunks, embeddings)
     """
     # TODO: Khởi tạo embeddings từ factory (1 dòng)
-    embeddings = ...
+    embeddings = get_embeddings()
 
     # TODO: Đọc nội dung knowledge base (1 dòng)
-    text = ...
+    text = load_knowledge_base()
 
     # TODO: Chia text thành chunks với chunk_size=500, chunk_overlap=50 (1 dòng)
-    chunks = ...
+    chunks = split_text(text, chunk_size=500, chunk_overlap=50)
     print(f"📚 Đã chia thành {len(chunks)} chunks")
 
     # TODO: Tạo FAISS vectorstore và trả về (1 dòng)
-    vectorstore = ...
+    vectorstore = build_vectorstore(chunks, embeddings)
     return vectorstore
 
 
@@ -60,7 +66,10 @@ def setup_vectorstore():
 #   ("human",  "{question}")
 #
 # Gợi ý: RAG_PROMPT = ChatPromptTemplate.from_messages([...])
-RAG_PROMPT = ...
+RAG_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", "Bạn là trợ lý AI hữu ích. Chỉ dùng context sau để trả lời.\n\nContext:\n{context}"),
+    ("human",  "{question}"),
+])
 
 
 # ── 3. Build RAG Chain ─────────────────────────────────────────────────────
@@ -77,35 +86,29 @@ def build_rag_chain(vectorstore):
     llm = get_llm()
 
     # TODO: Tạo retriever từ vectorstore, lấy k=3 tài liệu gần nhất
-    # Gợi ý: retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
-    retriever = ...
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
 
     # TODO: Định nghĩa hàm format_docs để ghép page_content của các docs thành 1 chuỗi
-    # Gợi ý: "\n\n".join(doc.page_content for doc in docs)
     def format_docs(docs):
-        ...
+        return "\n\n".join(doc.page_content for doc in docs)
 
     # TODO: Xây dựng LCEL chain dùng pipe operator (|)
-    # Gợi ý:
-    #   chain = (
-    #       {"context": retriever | format_docs, "question": RunnablePassthrough()}
-    #       | RAG_PROMPT | llm | StrOutputParser()
-    #   )
-    chain = ...
+    chain = (
+        {"context": retriever | format_docs, "question": RunnablePassthrough()}
+        | RAG_PROMPT | llm | StrOutputParser()
+    )
 
     return chain, retriever
 
 
 # ── 4. Hàm Query có LangSmith Tracing ─────────────────────────────────────
-# TODO: Thêm decorator @traceable(name="rag-query", tags=["rag", "step1"])
-#       phía TRÊN chữ ký hàm để LangSmith tự động ghi lại input/output/latency
+@traceable(name="rag-query", tags=["rag", "step1"])
 def ask(chain, question: str) -> str:
     """
     Chạy RAG chain với một câu hỏi.
     Decorator @traceable sẽ gửi mỗi lần gọi lên LangSmith như một trace riêng.
     """
-    # TODO: Gọi chain.invoke(question) và trả về kết quả
-    ...
+    return chain.invoke(question)
 
 
 # ── 5. Main ────────────────────────────────────────────────────────────────
@@ -117,15 +120,11 @@ def main():
     if not config.validate():
         sys.exit(1)
 
-    # TODO: Gọi setup_vectorstore() để tạo vectorstore
-    vectorstore = ...
+    vectorstore = setup_vectorstore()
+    chain, retriever = build_rag_chain(vectorstore)
 
-    # TODO: Gọi build_rag_chain(vectorstore) để nhận chain và retriever
-    chain, retriever = ...
-
-    # TODO: Lặp qua tất cả SAMPLE_QUESTIONS, gọi ask(), in câu hỏi và câu trả lời
     for i, question in enumerate(SAMPLE_QUESTIONS, 1):
-        answer = ...
+        answer = ask(chain, question)
         print(f"[{i:02d}/{len(SAMPLE_QUESTIONS)}] Q: {question[:60]}")
         print(f"       A: {str(answer)[:100]}\n")
 
